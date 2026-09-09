@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-from tm_agent import TMAgent, TMAgentBrain
-from tm_tape import TMTape
-from world_model_runner import WorldModelRunner
+from ReviewerNeuralComputing.tm_agent import TMAgent, TMAgentBrain
+from ReviewerNeuralComputing.tm_tape import TMTape
+from ReviewerNeuralComputing.world_model_runner import WorldModelRunner
 
 SYMBOL_COUNT = 2
 

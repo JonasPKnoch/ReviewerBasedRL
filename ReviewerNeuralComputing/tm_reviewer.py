@@ -1,9 +1,9 @@
 import torch
 from torch import nn
 
-from base_reviewer import BaseReviewer
-from tm_tape import TMTape
-from tm_agent import TMAgentBrain, TMAgent
+from ReviewerNeuralComputing.base_reviewer import BaseReviewer
+from ReviewerNeuralComputing.tm_tape import TMTape
+from ReviewerNeuralComputing.tm_agent import TMAgentBrain, TMAgent
 
 class TMReviewer(BaseReviewer):
     def __init__(self, 
