@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from typing import Self
 
-from ReviewerNeuralComputing.base_agent_state import BaseAgentState
-from ReviewerNeuralComputing.tm_tape import TMTape
+from base_agent_state import BaseAgentState
+from tm_tape import TMTape
 
 class TMAgentBrain(nn.Module):
     def __init__(self, symbol_count, embed_state_dim, hidden_dim: int = 16, hidden_layers: int = 3):

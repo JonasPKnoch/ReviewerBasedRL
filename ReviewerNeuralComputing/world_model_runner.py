@@ -1,6 +1,6 @@
 from typing import Optional
-from ReviewerNeuralComputing.base_agent_state import BaseAgentState
-from ReviewerNeuralComputing.base_world_state import BaseWorldState
+from base_agent_state import BaseAgentState
+from base_world_state import BaseWorldState
 
 class WorldModelRunner:
     def __init__(self, initial_world: BaseWorldState, initial_agent: BaseAgentState, timeout=100):

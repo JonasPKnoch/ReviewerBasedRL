@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-from ReviewerNeuralComputing.tm_agent import TMAgent, TMAgentBrain
-from ReviewerNeuralComputing.tm_tape import TMTape
-from ReviewerNeuralComputing.world_model_runner import WorldModelRunner
+from tm_agent import TMAgent, TMAgentBrain
+from tm_tape import TMTape
+from world_model_runner import WorldModelRunner
 
 SYMBOL_COUNT = 2
 
@@ -155,26 +155,21 @@ def generate_2bit_sorted_tasks(num_tasks: int, min_len: int = 2, max_len: int = 
         tasks.append(TMTask(tape, is_sorted, f"sorted_2bit_{i}"))
     return tasks
 
-def evaluate_agents(agents: list[TMAgent], tasks: list[TMTask]):
-    scored_agents = []
-    for agent in agents:
-        correct = 0
-        for task in tasks:
-            tape = TMTape(task.tape_arr)
-            runner = WorldModelRunner(tape, agent)
-            final_outout = runner.rollout()
-            if int(final_outout) == task.target_output:
-                correct += 1
+def evaluate_agent(agent: TMAgent, tasks: list[TMTask]):
+    correct = 0
+    for task in tasks:
+        tape = TMTape(task.tape_arr)
+        runner = WorldModelRunner(tape, agent)
+        final_outout = runner.rollout()
+        if int(final_outout) == task.target_output:
+            correct += 1
 
-        score = float(correct)/float(len(tasks))
-        scored_agents.append((agent, score))
-        print(f"Agent scored {len(scored_agents)}/{len(agents)}")
+    score = float(correct)/float(len(tasks))
 
-    scored_agents.sort(key=lambda e: -e[1])
-    return scored_agents
+    return score
 
 def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbol_count, embed_state_dim
-                                    ) -> list[tuple[TMTape, TMAgent, int]]:
+                                    ) -> list[tuple[TMAgent, float]]:
     tapes = []
     for task in tasks:
         tape = TMTape(task.tape_arr)
@@ -186,14 +181,9 @@ def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbo
         agents.append(agent)
 
     training_samples = []
-    for i in range(len(tasks)):
-        task = tasks[i]
-        initial_tape = tapes[i]
-        for agent in agents:
-            runner = WorldModelRunner(initial_tape, agent)
-            output = runner.rollout()
-            correct = 1 if int(output) == task.target_output else 0
-            training_samples.append((tape, agent, correct))
+    for agent in agents:
+        score = evaluate_agent(agent, tasks)
+        training_samples.append((agent, score))
 
     return training_samples
 

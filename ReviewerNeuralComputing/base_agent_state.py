@@ -1,5 +1,5 @@
 from typing import Self
-from ReviewerNeuralComputing.base_world_state import BaseWorldState
+from base_world_state import BaseWorldState
 
 class BaseAgentState:
     def take_action(self, world_state: BaseWorldState) -> tuple[BaseWorldState, Self]:

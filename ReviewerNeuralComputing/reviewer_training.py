@@ -4,11 +4,11 @@ from time import time
 import random
 import numpy as np
 
-from ReviewerNeuralComputing.base_world_state import BaseWorldState
-from ReviewerNeuralComputing.base_agent_state import BaseAgentState
-from ReviewerNeuralComputing.base_reviewer import BaseReviewer
+from base_world_state import BaseWorldState
+from base_agent_state import BaseAgentState
+from base_reviewer import BaseReviewer
 
-def train(reviewer: BaseReviewer, training_data: list[tuple[BaseWorldState, BaseAgentState, int]], epochs = 200, batch_size = 64, lr = 0.0001, log_every = 5):
+def train(reviewer: BaseReviewer, training_data: list[tuple[BaseAgentState, float]], epochs = 200, batch_size = 64, lr = 0.0001, log_every = 5):
     current_loss = 0
     all_losses = []
     reviewer.train()
@@ -27,9 +27,9 @@ def train(reviewer: BaseReviewer, training_data: list[tuple[BaseWorldState, Base
         for batch in batch_indices:
             batch_loss = 0
             for index in batch:
-                world, agent, target_output = training_data[index]
-                output = reviewer(world, agent)
-                loss = criterion(output, torch.tensor([target_output], dtype=torch.float32))
+                agent, score = training_data[index]
+                output = reviewer(agent)
+                loss = criterion(output, torch.tensor([score], dtype=torch.float32))
                 batch_loss += loss / len(batch)
 
             batch_loss.backward()

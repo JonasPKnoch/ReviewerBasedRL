@@ -1,6 +1,6 @@
 import numpy as np
 
-from ReviewerNeuralComputing.base_world_state import BaseWorldState
+from base_world_state import BaseWorldState
 
 class TMTape(BaseWorldState):
     def __init__(self, tape_arr: np.ndarray, symbol_count: int = 2):
