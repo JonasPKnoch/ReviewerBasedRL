@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
-from base_world_state import BaseWorldState
-from base_agent_state import BaseAgentState
+from ReviewerNeuralComputing.base_world_state import BaseWorldState
+from ReviewerNeuralComputing.base_agent_state import BaseAgentState
 
 class BaseReviewer(nn.Module):
     def __init__(self, *args, **kwargs):
