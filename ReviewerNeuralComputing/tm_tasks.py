@@ -155,11 +155,11 @@ def generate_2bit_sorted_tasks(num_tasks: int, min_len: int = 2, max_len: int = 
         tasks.append(TMTask(tape, is_sorted, f"sorted_2bit_{i}"))
     return tasks
 
-def evaluate_agent(agent: TMAgent, tasks: list[TMTask]):
+def evaluate_agent(agent: TMAgent, tasks: list[TMTask], timeout=100):
     correct = 0
     for i, task in enumerate(tasks):
         tape = TMTape(task.tape_arr)
-        runner = WorldModelRunner(tape, agent)
+        runner = WorldModelRunner(tape, agent, timeout=timeout)
         final_outout = runner.rollout()
         if int(final_outout) == task.target_output:
             correct += 1
@@ -167,7 +167,9 @@ def evaluate_agent(agent: TMAgent, tasks: list[TMTask]):
     score = float(correct)/float(len(tasks))
     return score
 
-def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbol_count = 2, embed_state_dim = 8
+
+def generate_reviewer_training_data(root_brain: TMAgentBrain, tasks: list[TMTask], agent_count: int, symbol_count = 2, embed_state_dim = 8, timeout=25,
+                                    save=True, dir="data", chunk_size=10000,
                                     ) -> list[tuple[TMAgent, float]]:
     print(f"Started generating {agent_count} training samples...")
     tapes = []
@@ -176,20 +178,19 @@ def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbo
         tapes.append(tape)
     print(f"Prepared {len(tasks)} tasks")
     
-    agents = []
-    for _ in range(agent_count):
-        agent = TMAgent(TMAgentBrain(symbol_count, embed_state_dim, 8, 3), torch.zeros((embed_state_dim)), 0, symbol_count)
-        agents.append(agent)
-        if len(agents) % 10000 == 0:
-            print(f"Generated agents {len(agents)}/{agent_count}")
-    
-
     training_samples = []
-    for agent in agents:
-        score = evaluate_agent(agent, tasks)
+    for i in range(agent_count):
+        agent = TMAgent(root_brain.mutate(), torch.zeros((embed_state_dim)), symbol_count=symbol_count)
+        score = evaluate_agent(agent, tasks, timeout=timeout)
         training_samples.append((agent, score))
 
-        if len(training_samples) % 10000 == 0 or len(training_samples) < 50:
-            print(f"Completed samples {len(training_samples)}/{agent_count}")
+        if save and (i + 1) % chunk_size == 0:
+            torch.save(training_samples, f"{dir}/training_samples_{i - chunk_size+1}-{i}")
+            print(f"Saved {chunk_size} training samples to {dir}. Completed {i}/{agent_count}")
+            training_samples = []
+
+        if i < 10:
+            print(f"Completed training sample {i+1}/{agent_count}")
+
     return training_samples
 

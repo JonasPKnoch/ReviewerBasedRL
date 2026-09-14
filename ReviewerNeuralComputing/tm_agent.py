@@ -1,4 +1,6 @@
 import torch
+import copy
+import math
 from torch import nn
 from typing import Self
 
@@ -42,6 +44,14 @@ class TMAgentBrain(nn.Module):
         halt_logits = self.halt_head(hidden_embed)
 
         return (write_logits, embed_state_output, move_logits, halt_logits) 
+
+    def mutate(self, scale=0.1) -> Self:
+        new_brain = copy.deepcopy(self)
+        for p in new_brain.parameters():
+            std = scale*math.sqrt(6.0/sum(p.data.shape)) #Basically normal Xavier but hopefully works for all vectors
+            delta = torch.normal(0.0, std, size = p.data.shape)
+            p.data += delta
+        return new_brain
 
 
 class TMAgent(BaseAgentState):
