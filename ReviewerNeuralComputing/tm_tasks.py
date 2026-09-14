@@ -157,7 +157,7 @@ def generate_2bit_sorted_tasks(num_tasks: int, min_len: int = 2, max_len: int = 
 
 def evaluate_agent(agent: TMAgent, tasks: list[TMTask]):
     correct = 0
-    for task in tasks:
+    for i, task in enumerate(tasks):
         tape = TMTape(task.tape_arr)
         runner = WorldModelRunner(tape, agent)
         final_outout = runner.rollout()
@@ -165,25 +165,31 @@ def evaluate_agent(agent: TMAgent, tasks: list[TMTask]):
             correct += 1
 
     score = float(correct)/float(len(tasks))
-
     return score
 
-def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbol_count, embed_state_dim
+def generate_reviewer_training_data(tasks: list[TMTask], agent_count: int, symbol_count = 2, embed_state_dim = 8
                                     ) -> list[tuple[TMAgent, float]]:
+    print(f"Started generating {agent_count} training samples...")
     tapes = []
     for task in tasks:
         tape = TMTape(task.tape_arr)
         tapes.append(tape)
+    print(f"Prepared {len(tasks)} tasks")
     
     agents = []
     for _ in range(agent_count):
-        agent = TMAgent(TMAgentBrain(symbol_count, embed_state_dim, 16, 3), torch.zeros((embed_state_dim)), 0, symbol_count)
+        agent = TMAgent(TMAgentBrain(symbol_count, embed_state_dim, 8, 3), torch.zeros((embed_state_dim)), 0, symbol_count)
         agents.append(agent)
+        if len(agents) % 10000 == 0:
+            print(f"Generated agents {len(agents)}/{agent_count}")
+    
 
     training_samples = []
     for agent in agents:
         score = evaluate_agent(agent, tasks)
         training_samples.append((agent, score))
 
+        if len(training_samples) % 10000 == 0 or len(training_samples) < 50:
+            print(f"Completed samples {len(training_samples)}/{agent_count}")
     return training_samples
 
