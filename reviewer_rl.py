@@ -8,6 +8,8 @@ from torch.func import stack_module_state, functional_call, vmap
 from jaxtyping import Float, Int, Bool
 from typing import Protocol, Callable, Self, ParamSpec, TypeVar, Any
 
+DEVICE = 'cuda'
+
 type AgentState = tuple[Float[Tensor, "batch ..."] | Int[Tensor, "batch ..."] | Bool[Tensor, "batch ..."], ...]
 type AgentObs = Float[Tensor, "batch ..."] | Int[Tensor, "batch ..."] | Bool[Tensor, "batch ..."]
 type AgentLogits = tuple[Float[Tensor, "batch ..."], ...]
@@ -33,6 +35,9 @@ class AgentWorldInterface(Protocol):
     def initial_agent_state(self, batch_size) -> AgentState:
         ...
 
+    def print_state(self, agent_state: AgentState, world_state: WorldState, reward: Reward, batch: int =0) -> None:
+        ...
+
 type AgentCallable = Callable[[AgentState, AgentObs], AgentLogits]
 
 class Agent(Module):
@@ -43,7 +48,7 @@ class Agent(Module):
         new_agent = copy.deepcopy(self)
         for p in new_agent.parameters():
             std = scale*math.sqrt(6.0/sum(p.data.shape)) #Basically normal Xavier but hopefully works for all vectors
-            delta = torch.normal(0.0, std, size = p.data.shape)
+            delta = torch.normal(0.0, std, size = p.data.shape, device='cuda')
             p.data += delta
         return new_agent
 
@@ -53,8 +58,8 @@ class Agent(Module):
             params_list.append(p.detach().flatten())
         return torch.concat(params_list) 
 
-
-def fast_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=100) -> Reward:
+@torch.inference_mode()
+def fast_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=20) -> Reward:
     initial_agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
     obs = interface.get_obs(initial_agent_state, initial_world_state)
     logits = agent(initial_agent_state, obs)
@@ -65,11 +70,29 @@ def fast_rollout(agent: AgentCallable, initial_world_state: WorldState, interfac
         obs = interface.get_obs(agent_state, world_state)
         logits = agent(agent_state, obs)
         agent_state, world_state, reward, terminal = interface.take_action(logits, agent_state, world_state)
-
         sum_reward += reward
 
     return sum_reward
 
+compiled_rollout = torch.compile(fast_rollout, mode="reduce-overhead")
+
+def verbose_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=100) -> Reward:
+    initial_agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
+    obs = interface.get_obs(initial_agent_state, initial_world_state)
+    logits = agent(initial_agent_state, obs)
+    agent_state, world_state, reward, terminal = interface.take_action(logits, initial_agent_state, initial_world_state)
+    sum_reward = reward
+
+    interface.print_state(agent_state, world_state, reward)
+    
+    for i in range(max_depth):
+        obs = interface.get_obs(agent_state, world_state)
+        logits = agent(agent_state, obs)
+        agent_state, world_state, reward, terminal = interface.take_action(logits, agent_state, world_state)
+        sum_reward += reward
+        interface.print_state(agent_state, world_state, reward)
+
+    return sum_reward
 
 type TaskGenerator = Callable[[int, int, Any], WorldState]
 
@@ -112,14 +135,14 @@ def score_population_streams(pop: list[Agent], tasks: WorldState, interface: Age
 class ReviewerDataset(Dataset):
     def __init__(self, agents: list[Agent], agent_scores: list[AgentScore]) -> None:
         self.agent_params: list[AgentParameters] = [agent.parameters_vector() for agent in agents]
-        self.agent_scores: list[AgentScore] = agent_scores
+        self.agent_scores: list[AgentScore] = [score for score in agent_scores]
 
     def __len__(self):
         return len(self.agent_params)
 
     def __getitem__(self, index) -> tuple[AgentParameters, AgentScore]:
         return self.agent_params[index], self.agent_scores[index]
-    
+
 class Reviewer(Module):
     def __init__(self, paramaters_template: AgentParameters, mlp_shape: list[int] = [512, 256, 128, 64]):
         super(Reviewer, self).__init__()

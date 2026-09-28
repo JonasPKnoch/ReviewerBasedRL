@@ -20,8 +20,8 @@ def sample_logits(logits: Float[Tensor, "batch cats"]) -> Int[Tensor, "batch"]:
     probs = torch.exp(norm_logits)
     cumprobs = torch.cumsum(probs, dim=1)
 
-    sample_locations = torch.rand((logits.shape[0]))
-    samples = torch.zeros((logits.shape[0]), dtype=torch.int)
+    sample_locations = torch.rand((logits.shape[0]), device='cuda')
+    samples = torch.zeros((logits.shape[0]), dtype=torch.int, device='cuda')
 
     for i in range(probs.shape[1]-1, -1, -1):
         samples[sample_locations < cumprobs[:,i]] = i #There might be a better way to do this, but honestly, fuck broadcasting :P
@@ -46,14 +46,16 @@ class TMInterface(AgentWorldInterface):
         embed_state, position, halted = agent_state
         tape, correct_output  = world_state
 
+        batch_size: int = tape.shape[0]
+
         write_symbol = sample_logits(write_logits)
         move_index = sample_logits(move_logits)
         halt = sample_logits(halt_logits)
 
-        new_tape = tape.detach()
-        write = torch.zeros((self.tm_class.symbol_count + 1), dtype=torch.long)
-        write[write_symbol] = 1
-        new_tape[torch.clamp(position, 0, tape.shape[1]-1)] = write
+        new_tape = tape.detach().clone()
+        write = torch.zeros((batch_size, self.tm_class.symbol_count + 1), dtype=torch.long, device='cuda')
+        write[torch.arange(batch_size), write_symbol] = 1
+        new_tape[torch.arange(batch_size), torch.clamp(position, 0, tape.shape[1]-1)] = write
 
         move = move_index - self.tm_class.max_move
         move += move > 1
@@ -61,8 +63,7 @@ class TMInterface(AgentWorldInterface):
 
         reward = halt == (correct_output + 1)
         reward = reward.to(torch.float)
-        reward.masked_fill(halted, 0) #Esnure that any halted output gives no reward
-
+        reward[halted] = 0 #Ensure that any halted output gives no reward
 
         new_halted = torch.logical_or(halted, (halt > 0))
 
@@ -74,9 +75,29 @@ class TMInterface(AgentWorldInterface):
 
     def initial_agent_state(self, batch_size: int) -> TMAgentState:
         return (
-            torch.zeros((batch_size, self.tm_class.embed_state_dim), dtype=torch.float), 
-            torch.zeros((batch_size,), dtype=torch.int),
-            torch.zeros((batch_size,), dtype=torch.bool))
+            torch.zeros((batch_size, self.tm_class.embed_state_dim), dtype=torch.float, device='cuda'), 
+            torch.ones((batch_size,), dtype=torch.int, device='cuda'),
+            torch.zeros((batch_size,), dtype=torch.bool, device='cuda'))
+
+    def print_state(self, agent_state: TMAgentState, world_state: TMWorldState, reward: Reward, batch: int = 0) -> None:
+        embed_state, position, halted = agent_state
+        tape, correct_output  = world_state
+        position = position[batch]
+        halted = halted[batch]
+        tape = tape[batch]
+        reward = reward[batch]
+        
+        tape_arr = [f" {int(torch.argmax(el))} " for el in tape]
+
+        clamped_position = torch.clamp(position, 0, len(tape)-1)
+
+        agent_str = f"({tape_arr[clamped_position][1]})"
+        tape_arr[clamped_position] = agent_str
+
+        tape_str = "|".join(tape_arr)
+
+        print(f"{tape_str}      REWARD: {reward} HALTED: {halted}")
+
 
 class TMAgent(Agent):
     def __init__(self, mlp_shape: list[int] = [16, 16, 16], tm_class: TMClass = TMClass()):
@@ -114,3 +135,5 @@ class TMAgent(Agent):
         halt_logits = self.halt_head(mlp_output)
 
         return (embed_state_output, write_logits, move_logits, halt_logits) 
+
+    

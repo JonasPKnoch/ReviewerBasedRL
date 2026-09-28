@@ -5,7 +5,7 @@ from tm_interface import TMAgent, TMInterface, TMClass
 from reviewer_rl import fast_rollout, fast_rollout, create_population, score_function
 
 tasks = contains_one_task_generator(10, 64)
-agent = TMAgent()
+agent = TMAgent().to('cuda')
 interface = TMInterface()
 
 pop = create_population(agent, 1000)

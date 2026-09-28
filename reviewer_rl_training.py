@@ -11,7 +11,7 @@ from reviewer_rl import ReviewerDataset, Reviewer
 
 @dataclass
 class TrainConfig:
-    epochs: int = 100
+    epochs: int = 200
     batch_size: int = 128
     lr: float = 3e-4
     weight_decay: float = 1e-2
@@ -19,19 +19,10 @@ class TrainConfig:
     grad_clip_norm: float = 1.0
     val_fraction: float = 0.1          # used only if val_dataset is not provided
     early_stopping_patience: int = 15
-    loss: str = "smooth_l1"            # "mse" or "smooth_l1" (Huber-like, more outlier-robust)
     use_amp: bool = True               # mixed precision, only kicks in on CUDA
-    num_workers: int = 4
+    num_workers: int = 0
     device: Optional[str] = None       # auto-detected if None
     log_every: int = 1                 # print every N epochs
-
-
-def _make_loss(name: str) -> nn.Module:
-    if name == "mse":
-        return nn.MSELoss()
-    if name == "smooth_l1":
-        return nn.SmoothL1Loss()
-    raise ValueError(f"Unknown loss: {name}")
 
 
 def _warmup_cosine_lr(step: int, total_steps: int, warmup_steps: int) -> float:
@@ -68,14 +59,14 @@ def train_reviewer(
 
     train_loader = DataLoader(
         train_dataset, batch_size=config.batch_size, shuffle=True,
-        num_workers=config.num_workers, pin_memory=(device == "cuda"), drop_last=True,
+        num_workers=config.num_workers, drop_last=True,
     )
     val_loader = DataLoader(
         val_dataset, batch_size=config.batch_size, shuffle=False,
-        num_workers=config.num_workers, pin_memory=(device == "cuda"),
+        num_workers=config.num_workers
     )
 
-    criterion = _make_loss(config.loss)
+    criterion = nn.MSELoss()
     optimizer = torch.optim.AdamW(reviewer.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     steps_per_epoch = max(1, len(train_loader))
@@ -128,7 +119,7 @@ def train_reviewer(
                 targets = targets.to(device, non_blocking=True).float().view(-1, 1)
                 preds = reviewer(embeddings).view(-1, 1)
                 val_running_loss += criterion(preds, targets).item() * embeddings.size(0)
-        val_loss = val_running_loss / len(train_dataset)
+        val_loss = val_running_loss / len(val_dataset)
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
