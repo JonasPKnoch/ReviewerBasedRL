@@ -16,17 +16,9 @@ type TMAgentLogits = tuple[Float[Tensor, "batch embed_state"], Float[Tensor, "ba
 type TMWorldState = tuple[Float[Tensor, "batch max_world_size symbol_count+1"], Int[Tensor, "batch"]]
 
 def sample_logits(logits: Float[Tensor, "batch cats"]) -> Int[Tensor, "batch"]:
-    norm_logits = logits - logits.logsumexp(dim=1, keepdim=True)
-    probs = torch.exp(norm_logits)
-    cumprobs = torch.cumsum(probs, dim=1)
-
-    sample_locations = torch.rand((logits.shape[0]), device='cuda')
-    samples = torch.zeros((logits.shape[0]), dtype=torch.int, device='cuda')
-
-    for i in range(probs.shape[1]-1, -1, -1):
-        samples[sample_locations < cumprobs[:,i]] = i #There might be a better way to do this, but honestly, fuck broadcasting :P
-
-    return samples
+    logits = logits.float()
+    noise = torch.empty_like(logits).exponential_().log()   # -Gumbel
+    return (logits - noise).argmax(-1)
 
 
 class TMInterface(AgentWorldInterface):
@@ -43,7 +35,7 @@ class TMInterface(AgentWorldInterface):
 
     def take_action(self, agent_logits: TMAgentLogits, agent_state: TMAgentState, world_state: TMWorldState) -> tuple[TMAgentState, TMWorldState, Reward, Terminal]:
         embed_output, write_logits, move_logits, halt_logits = agent_logits
-        embed_state, position, halted = agent_state
+        embed_state, position, terminal = agent_state
         tape, correct_output  = world_state
 
         batch_size: int = tape.shape[0]
@@ -52,10 +44,10 @@ class TMInterface(AgentWorldInterface):
         move_index = sample_logits(move_logits)
         halt = sample_logits(halt_logits)
 
-        new_tape = tape.detach().clone()
-        write = torch.zeros((batch_size, self.tm_class.symbol_count + 1), dtype=torch.long, device='cuda')
-        write[torch.arange(batch_size), write_symbol] = 1
-        new_tape[torch.arange(batch_size), torch.clamp(position, 0, tape.shape[1]-1)] = write
+        idx = torch.arange(batch_size, device=tape.device)
+        new_tape = tape.clone()
+        write_one_hot = torch.nn.functional.one_hot(write_symbol, tape.shape[-1]).to(tape.dtype)
+        new_tape[idx, torch.clamp(position, 0, tape.shape[1]-1)] = write_one_hot
 
         move = move_index - self.tm_class.max_move
         move += move > 1
@@ -63,14 +55,14 @@ class TMInterface(AgentWorldInterface):
 
         reward = halt == (correct_output + 1)
         reward = reward.to(torch.float)
-        reward[halted] = 0 #Ensure that any halted output gives no reward
+        reward = torch.where(terminal, 0., reward) #Ensure that any halted output gives no reward
 
-        new_halted = torch.logical_or(halted, (halt > 0))
+        new_terminal = torch.logical_or(terminal, (halt > 0))
 
-        new_agent_state = (embed_output, new_position, new_halted)
+        new_agent_state = (embed_output, new_position, new_terminal)
         new_world_state = (new_tape, correct_output)
 
-        return (new_agent_state, new_world_state, reward, new_halted)
+        return (new_agent_state, new_world_state, reward, new_terminal)
 
 
     def initial_agent_state(self, batch_size: int) -> TMAgentState:

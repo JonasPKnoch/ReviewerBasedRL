@@ -102,6 +102,12 @@ def score_function(tasks: WorldState, agent: AgentCallable, interface: AgentWorl
 
     return mean
 
+def compiled_score_function(tasks: WorldState, agent: AgentCallable, interface: AgentWorldInterface) -> AgentScore:
+    reward = compiled_rollout(agent, tasks, interface)
+    mean = reward.mean(dim=0)
+    
+    return mean
+
 def create_population(parent: Agent, population_size: int, scale: float=0.1) -> list[Agent]:
     return [parent.mutate(scale) for _ in range(population_size)]
 
@@ -129,6 +135,16 @@ def score_population_streams(pop: list[Agent], tasks: WorldState, interface: Age
             scores_dict[i] = score_function(tasks, agent, interface)
 
     torch.cuda.synchronize()
+
+    return list(scores_dict.values())
+
+def score_population_compiled(pop: list[Agent], tasks: WorldState, interface: AgentWorldInterface) -> list[AgentScore]:
+    base_agent: Module = copy.deepcopy(pop[0]).cuda().eval().requires_grad_(False)
+    scores_dict: dict[int, AgentScore] = {}
+
+    for i, agent in enumerate(pop):
+        base_agent.load_state_dict(agent.state_dict())
+        scores_dict[i] = compiled_score_function(tasks, base_agent, interface).clone()
 
     return list(scores_dict.values())
 
