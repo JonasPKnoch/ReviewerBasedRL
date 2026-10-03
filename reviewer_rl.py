@@ -62,7 +62,7 @@ class Agent(Module):
 def fast_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=20) -> Reward:
     world_state = copy.deepcopy(initial_world_state)
     agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
-    sum_reward = 0
+    sum_reward = torch.tensor(0.0)
     
     for i in range(max_depth):
         obs = interface.get_obs(agent_state, world_state)
@@ -77,7 +77,7 @@ compiled_rollout = torch.compile(fast_rollout, mode="reduce-overhead")
 def verbose_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=100) -> Reward:
     world_state = copy.deepcopy(initial_world_state)
     agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
-    sum_reward = 0
+    sum_reward = torch.tensor(0.0)
     
     for i in range(max_depth):
         obs = interface.get_obs(agent_state, world_state)
@@ -184,8 +184,8 @@ class ReviewerDataset(Dataset):
         self.param_mean: Float[Tensor, "params"] = mean
         self.param_std: Float[Tensor, "params"] = std
 
-        agent_scores, mean, std = transform_scores(agent_scores, score_mean, score_std)
-        self.agent_scores: ReviewerScore = agent_scores
+        scores, mean, std = transform_scores(agent_scores, score_mean, score_std)
+        self.agent_scores: ReviewerScore = scores
         self.score_mean: Float[Tensor, ""] = mean
         self.score_std:Float[Tensor, ""] = std
 

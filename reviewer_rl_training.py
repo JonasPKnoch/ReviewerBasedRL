@@ -1,11 +1,11 @@
 import copy
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, random_split, Subset
 
 from reviewer_rl import ReviewerDataset, Reviewer
 
@@ -36,10 +36,10 @@ def _warmup_cosine_lr(step: int, total_steps: int, warmup_steps: int) -> float:
 
 def train_reviewer(
     reviewer: Reviewer,
-    train_dataset: Dataset,
-    val_dataset: Dataset,
+    train_dataset: ReviewerDataset | Subset[ReviewerDataset],
+    val_dataset: ReviewerDataset | Subset[ReviewerDataset],
     config: TrainConfig = field(default_factory=TrainConfig),
-) -> dict:
+) -> tuple[dict, dict]:
     """
     Trains `model` to predict a scalar quality score from an embedding.
 
