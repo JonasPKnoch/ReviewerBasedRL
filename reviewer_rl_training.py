@@ -36,8 +36,8 @@ def _warmup_cosine_lr(step: int, total_steps: int, warmup_steps: int) -> float:
 
 def train_reviewer(
     reviewer: Reviewer,
-    train_dataset: ReviewerDataset,
-    val_dataset: ReviewerDataset,
+    train_dataset: Dataset,
+    val_dataset: Dataset,
     config: TrainConfig = field(default_factory=TrainConfig),
 ) -> dict:
     """
@@ -142,6 +142,7 @@ def train_reviewer(
                       f"{config.early_stopping_patience} epochs). Best val_loss: {best_val_loss:.4f}")
                 break
 
+    last_state = reviewer.state_dict()
     reviewer.load_state_dict(best_state)
     history["best_val_loss"] = best_val_loss
-    return history
+    return history, last_state

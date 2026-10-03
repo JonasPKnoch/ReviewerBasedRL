@@ -45,13 +45,12 @@ class TMInterface(AgentWorldInterface):
         halt = sample_logits(halt_logits)
 
         idx = torch.arange(batch_size, device=tape.device)
-        new_tape = tape.clone()
         write_one_hot = torch.nn.functional.one_hot(write_symbol, tape.shape[-1]).to(tape.dtype)
-        new_tape[idx, torch.clamp(position, 0, tape.shape[1]-1)] = write_one_hot
+        tape[idx, torch.clamp(position, 0, tape.shape[1]-1)] = write_one_hot
 
         move = move_index - self.tm_class.max_move
-        move += move > 1
-        new_position = position + move
+        move = move + (move > 1)
+        position = position + move
 
         reward = halt == (correct_output + 1)
         reward = reward.to(torch.float)
@@ -59,8 +58,8 @@ class TMInterface(AgentWorldInterface):
 
         new_terminal = torch.logical_or(terminal, (halt > 0))
 
-        new_agent_state = (embed_output, new_position, new_terminal)
-        new_world_state = (new_tape, correct_output)
+        new_agent_state = (embed_output, position, new_terminal)
+        new_world_state = (tape, correct_output)
 
         return (new_agent_state, new_world_state, reward, new_terminal)
 
