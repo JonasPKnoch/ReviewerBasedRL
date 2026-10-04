@@ -25,6 +25,8 @@ type PRewards = Float[Tensor, "agent batch"]
 type PWorldStates = Float[Tensor, "agent batch ..."]
 type PAgentScores = Float["Tensor", "agent"]
 
+type MirrorReviewerInputParams = dict[str, Float[Tensor, "batch param"]]
+
 class AgentWorldInterface(Protocol):
     def get_obs(self, agent_state: AgentState, world_state: WorldState) -> AgentObs:
         ...
@@ -52,17 +54,38 @@ class Agent(Module):
             p.data += delta
         return new_agent
 
+    def param_count(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+
     def parameters_vector(self) -> AgentParameters:
         params_list = []
         for p in self.parameters():
             params_list.append(p.detach().flatten())
         return torch.concat(params_list) 
 
+    def parameters_dict(self) -> MirrorReviewerInputParams:
+        params_list = []
+        params_dict = {}
+        for n, m in self.named_modules():
+            if isinstance(m, nn.Linear):
+                module_params = []
+                for p in m.parameters():
+                    module_params.append(p.detach().flatten())
+                p_v = torch.cat(module_params) 
+                params_dict[n] = p_v
+                params_list.append(p_v)
+
+        all_params = torch.cat(params_list) 
+        params_dict["all_params"] = all_params
+        return params_dict
+        
+
+
 @torch.inference_mode()
 def fast_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=20) -> Reward:
     world_state = copy.deepcopy(initial_world_state)
     agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
-    sum_reward = torch.tensor(0.0)
+    sum_reward = torch.zeros((initial_world_state[0].shape[0]), device=initial_world_state[0].device)
     
     for i in range(max_depth):
         obs = interface.get_obs(agent_state, world_state)
@@ -77,7 +100,8 @@ compiled_rollout = torch.compile(fast_rollout, mode="reduce-overhead")
 def verbose_rollout(agent: AgentCallable, initial_world_state: WorldState, interface: AgentWorldInterface, max_depth=100) -> Reward:
     world_state = copy.deepcopy(initial_world_state)
     agent_state = interface.initial_agent_state(initial_world_state[0].shape[0])
-    sum_reward = torch.tensor(0.0)
+    
+    sum_reward = torch.zeros((initial_world_state[0].shape[0]), device=initial_world_state[0].device)
     
     for i in range(max_depth):
         obs = interface.get_obs(agent_state, world_state)
@@ -174,7 +198,7 @@ def transform_scores(agent_scores: list[AgentScore],
 
     return scores, mean, std
 
-class ReviewerDataset(Dataset):
+class FlatReviewerDataset(Dataset):
     def __init__(self, agents: list[Agent], agent_scores: list[AgentScore], 
                 param_mean: Float[Tensor, "params"] | None = None, param_std: Float[Tensor, "params"] | None = None,
                 score_mean: Float[Tensor, ""] | None = None, score_std: Float[Tensor, ""] | None = None,
@@ -195,9 +219,30 @@ class ReviewerDataset(Dataset):
     def __getitem__(self, index) -> tuple[AgentParameters, AgentScore]:
         return self.agent_params[index], self.agent_scores[index]
 
-class Reviewer(Module):
+class MirrorReviewerDataset(Dataset):
+    def __init__(self, agents: list[Agent], agent_scores: list[AgentScore], 
+                param_mean: Float[Tensor, "params"] | None = None, param_std: Float[Tensor, "params"] | None = None,
+                score_mean: Float[Tensor, ""] | None = None, score_std: Float[Tensor, ""] | None = None,
+                ) -> None:
+        agent_params, mean, std  = transform_agent_params(agents, param_mean, param_std)
+        self.agent_params: AgentParametersBatch = agent_params
+        self.param_mean: Float[Tensor, "params"] = mean
+        self.param_std: Float[Tensor, "params"] = std
+
+        scores, mean, std = transform_scores(agent_scores, score_mean, score_std)
+        self.agent_scores: ReviewerScore = scores
+        self.score_mean: Float[Tensor, ""] = mean
+        self.score_std:Float[Tensor, ""] = std
+
+    def __len__(self):
+        return len(self.agent_params)
+
+    def __getitem__(self, index) -> tuple[AgentParameters, AgentScore]:
+        return self.agent_params[index], self.agent_scores[index]
+
+class FlatReviewer(Module):
     def __init__(self, paramaters_template: AgentParameters, mlp_shape: list[int] = [256, 128, 64]):
-        super(Reviewer, self).__init__()
+        super(FlatReviewer, self).__init__()
         self.input_dim = paramaters_template.shape[0]
 
         self.mlp = nn.Sequential()
@@ -215,3 +260,70 @@ class Reviewer(Module):
 
     def forward(self, params: AgentParametersBatch) -> ReviewerScore:
         return self.mlp(params)
+
+class MirrorReviewer(Module):
+    def __init__(self, mirroring: Agent, width_factor: int = 2):
+        super(MirrorReviewer, self).__init__()
+        self.input_params: MirrorReviewerInputParams = {}
+        self.width_factor = width_factor
+        self.agent: Agent = copy.deepcopy(mirroring)
+
+        module_names: dict[Module, str] = {n: m for m, n in self.agent.named_modules()}
+        self.recursive_replace(self.agent, module_names)
+
+    def forward(self, params: MirrorReviewerInputParams) -> PAgentScores:
+        raise NotImplemented("Reviewer must implement forward")
+
+
+    def recursive_replace(self, module: Module, module_names: dict[Module, str]) -> None:
+        for n, _ in module.named_parameters(recurse=False):
+            raise ValueError(f"Non-linear module {module_names[module]} has parameter {n}!")
+        if isinstance(module, nn.Sequential):
+            self.replace_sequential(module, module_names)
+        else:
+            self.replace_module(module, module_names)
+
+    def replace_sequential(self, module: nn.Sequential, module_names: dict[Module, str]) -> None:
+        for i in range(len(module)):
+            child = module[i]
+            if isinstance(child, nn.Linear):
+                module[i] = MirrorReviewerLinear(child, module_names[child], self.input_params, self.width_factor).cuda()
+            else:
+                self.recursive_replace(child, module_names)
+
+    def replace_module(self, module: Module, module_names: dict[Module, str]) -> None:
+        for name, child in module.named_children():
+            if isinstance(child, nn.Linear):
+                setattr(module, name, MirrorReviewerLinear(child, module_names[child], self.input_params, self.width_factor).cuda())
+            else:
+                self.recursive_replace(child, module_names)
+
+class MirrorReviewerLinear(Module):
+    def __init__(self, mirroring: nn.Linear, module_name: str, input_params: MirrorReviewerInputParams, width_factor: int, hidden_size: int = 16, mlp_layer_count: int = 2):
+        super(MirrorReviewerLinear, self).__init__()
+        self.module_name = module_name
+        self.input_params = input_params
+
+        param_count = sum(p.numel() for p in mirroring.parameters())
+        self.bilinear = nn.Bilinear(mirroring.in_features*width_factor, param_count, hidden_size)
+
+        self.hidden_input_norm = nn.LayerNorm([mirroring.in_features*width_factor])
+        self.param_input_norm = nn.LayerNorm([param_count])
+
+        self.mlp = nn.Sequential()
+        for i in range(1, mlp_layer_count):
+            self.mlp.append(nn.Linear(hidden_size, hidden_size))
+            self.mlp.append(nn.ReLU())
+        self.mlp.append(nn.Linear(hidden_size, mirroring.out_features*width_factor))
+
+    def forward(self, hidden: Any) -> Any:
+        params = self.input_params[self.module_name]
+
+        hidden_normalized = self.hidden_input_norm(hidden)
+        params_normalized = self.param_input_norm(params)
+
+        x = self.bilinear(hidden_normalized, params_normalized)
+        x = self.mlp(x)
+
+        return x
+

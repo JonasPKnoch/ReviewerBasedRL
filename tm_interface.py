@@ -1,4 +1,4 @@
-from reviewer_rl import AgentWorldInterface, Agent, Reward, Terminal
+from reviewer_rl import AgentWorldInterface, Agent, Reward, Terminal, MirrorReviewer, MirrorReviewerInputParams, PAgentScores
 import torch
 from torch import nn, Tensor
 from typing import NamedTuple
@@ -96,6 +96,7 @@ class TMAgent(Agent):
         if mlp_shape[0]%2 == 1:
                 raise ValueError("Hidden dimension must be divisible by 2")
         self.tm_class = tm_class
+        self.mlp_shape = mlp_shape
 
         self.obs_input = nn.Linear(tm_class.symbol_count + 1, int(mlp_shape[0]/2))
         self.embed_state_input = nn.Linear(tm_class.embed_state_dim, int(mlp_shape[0]/2))
@@ -107,9 +108,9 @@ class TMAgent(Agent):
             self.mlp.append(nn.ReLU())
 
         self.embed_state_head = nn.Linear(mlp_shape[-1], tm_class.embed_state_dim)
-        self.write_head = nn.Sequential(nn.Linear(mlp_shape[-1], tm_class.symbol_count), nn.LogSoftmax(dim=1))
-        self.move_head = nn.Sequential(nn.Linear(mlp_shape[-1], tm_class.max_move*2), nn.LogSoftmax(dim=1))
-        self.halt_head = nn.Sequential(nn.Linear(mlp_shape[-1], 3), nn.LogSoftmax(dim=1))
+        self.write_head = nn.Sequential(nn.Linear(mlp_shape[-1], tm_class.symbol_count), nn.LogSoftmax(dim=-1))
+        self.move_head = nn.Sequential(nn.Linear(mlp_shape[-1], tm_class.max_move*2), nn.LogSoftmax(dim=-1))
+        self.halt_head = nn.Sequential(nn.Linear(mlp_shape[-1], 3), nn.LogSoftmax(dim=-1))
 
     def forward(self, agent_state: TMAgentState, agent_obs: TMAgentObs) -> TMAgentLogits:
         embed_state, position, halted = agent_state
@@ -117,7 +118,7 @@ class TMAgent(Agent):
         state_project = self.embed_state_input(embed_state)
         read_project = self.obs_input(agent_obs)
 
-        input = torch.concat([read_project, state_project], dim=1)
+        input = torch.concat([read_project, state_project], dim=-1)
         mlp_output = self.mlp(input)
 
         embed_state_output = self.embed_state_head(mlp_output)
@@ -127,4 +128,44 @@ class TMAgent(Agent):
 
         return (embed_state_output, write_logits, move_logits, halt_logits) 
 
-    
+class TMAgentReviewer(MirrorReviewer):
+    def __init__(self, agent: TMAgent, width_factor: int = 2):
+        super(TMAgentReviewer, self).__init__(agent, width_factor)
+        print(agent.embed_state_input)
+        self.agent: TMAgent = self.agent
+        self.agent.write_head.pop(1)
+        self.agent.move_head.pop(1)
+        self.agent.halt_head.pop(1)
+
+
+        self.obs_input_encode = nn.Linear(
+            agent.param_count(), 
+            agent.obs_input.in_features * width_factor)
+        self.embed_state_input_encode = nn.Linear(
+            agent.param_count(), 
+            agent.embed_state_input.in_features * width_factor)
+
+        self.output_decode = nn.Linear(
+            (agent.tm_class.embed_state_dim + 
+             agent.tm_class.symbol_count +
+             agent.tm_class.max_move*2 +
+             3)*width_factor,
+             1
+        )
+
+    def forward(self, params: MirrorReviewerInputParams) -> PAgentScores:
+        self.input_params.update(params)
+        all_params = params["all_params"]
+
+        obs_encode = self.obs_input_encode(all_params)
+        embed_encode = self.embed_state_input_encode(all_params)
+
+        print(embed_encode.shape)
+        print(self.agent.embed_state_input)
+        embed_state_output, write_logits, move_logits, halt_logits = self.agent((embed_encode, None, None), obs_encode)
+
+        output = torch.cat([embed_state_output, write_logits, move_logits, halt_logits], dim=-1)
+
+        prediction = self.output_decode(output)
+
+        return prediction
